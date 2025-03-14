@@ -1,0 +1,307 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Online Terminal - Tailscale Install</title>
+  <style>
+    body {
+      background-color: #1e1e1e;
+      color: #33ff33;
+      font-family: monospace;
+      margin: 0;
+      padding: 0;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    #terminal-container {
+      flex: 1;
+      overflow-y: auto;
+      padding: 10px;
+      white-space: pre-wrap;
+    }
+
+    #input-line {
+      display: flex;
+      padding: 10px;
+      background-color: #111;
+      border-top: 1px solid #333;
+    }
+
+    .prompt {
+      margin-right: 5px;
+    }
+
+    #command-input {
+      background: none;
+      color: inherit;
+      border: none;
+      outline: none;
+      font-family: inherit;
+      font-size: inherit;
+      flex: 1;
+    }
+
+    .line {
+      line-height: 1.4em;
+    }
+  </style>
+</head>
+<body>
+  <div id="terminal-container"></div>
+  <div id="input-line">
+    <span class="prompt" id="prompt-text">user@online-terminal:~$</span>
+    <input type="text" id="command-input" autofocus autocomplete="off" />
+  </div>
+
+  <script>
+    const terminal = document.getElementById('terminal-container');
+    const input = document.getElementById('command-input');
+    const promptText = document.getElementById('prompt-text');
+    let lastCommand = '';
+    let sudoMode = false;
+    let awaitingPassword = false;
+    let tailscaleInstalled = false;
+
+    const sudoPassword = "password123";
+
+    const commands = {
+      help: () => `Available commands:
+help                     - show this help
+clear                    - clear the terminal
+echo [txt]               - repeat text
+date                     - show current date and time
+spam [num]               - spam lines up to num
+wget [url]               - simulate file download
+sudo [cmd]               - run command with elevated privileges
+tailscale                - show tailscale status (if installed)
+curl -fsSL tailscale.sh | sh - install tailscale`,
+      
+      clear: () => {
+        terminal.innerHTML = '';
+        return '';
+      },
+
+      echo: (args) => args.join(' '),
+
+      date: () => new Date().toString(),
+
+      spam: (args) => {
+        let count = parseInt(args[0]) || 10;
+        count = Math.min(count, 10000);
+        let output = '';
+        for (let i = 1; i <= count; i++) {
+          output += `Spamming line ${i}\n`;
+        }
+        return output.trim();
+      },
+
+      wget: (args) => {
+        if (args.length === 0) return 'wget: missing URL';
+        const url = args[0];
+        let output = `--${getFormattedDate()}--  ${url}\n`;
+        output += `Resolving ${getHostFromURL(url)}... 127.0.0.1\n`;
+        output += `Connecting to ${getHostFromURL(url)}|127.0.0.1|:80... connected.\n`;
+        output += `HTTP request sent, awaiting response... 200 OK\n`;
+        output += `Length: 1024 (1.0K) [application/octet-stream]\n`;
+        output += `Saving to: ‘file’\n\n`;
+        output += `file                        100%[================================>]   1.00K  --.-KB/s    in 0s\n\n`;
+        output += `${getFormattedDate()} (10 MB/s) - ‘file’ saved [1024/1024]\n`;
+        return output;
+      },
+
+      tailscale: () => {
+        if (!tailscaleInstalled) {
+          return "tailscale: command not found. Try installing it first.";
+        }
+        return `Tailscale v1.56.1\nLogged in as user@example.com\n100.100.100.100   online-terminal   linux   active\n\nConnected to Tailscale network.`;
+      },
+
+      "curl -fsSL tailscale.sh | sh": () => {
+        if (tailscaleInstalled) {
+          return "Tailscale is already installed!";
+        }
+        tailscaleInstalled = true;
+        return `# Running tailscale install script
+Detecting platform... Linux
+Fetching latest version...
+Installing Tailscale v1.56.1...
+Installation complete!
+
+You can now run:
+  sudo tailscale up
+`;
+      }
+    };
+
+    function getFormattedDate() {
+      const now = new Date();
+      const year = now.getFullYear();
+      const month = String(now.getMonth() + 1).padStart(2, '0');
+      const day = String(now.getDate()).padStart(2, '0');
+      const hours = String(now.getHours()).padStart(2, '0');
+      const minutes = String(now.getMinutes()).padStart(2, '0');
+      const seconds = String(now.getSeconds()).padStart(2, '0');
+      return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
+    }
+
+    function getHostFromURL(url) {
+      try {
+        return new URL(url).hostname;
+      } catch {
+        return 'unknown-host';
+      }
+    }
+
+    input.addEventListener('keydown', function(e) {
+      if (e.key === 'Enter') {
+        const rawInput = input.value.trim();
+        input.value = '';
+
+        if (awaitingPassword) {
+          if (rawInput === sudoPassword) {
+            sudoMode = true;
+            awaitingPassword = false;
+            appendLine('Password accepted. You are now in sudo mode.');
+            updatePrompt();
+            return;
+          } else {
+            appendLine('Sorry, try again.');
+            awaitingPassword = false;
+            return;
+          }
+        }
+
+        appendLine(`${getPrompt()} ${rawInput}`);
+
+        if (!rawInput) return;
+
+        const args = rawInput.split(' ');
+        let cmd = args.shift();
+
+        if (cmd === 'sudo') {
+          if (args.length === 0) {
+            appendLine('usage: sudo [command]');
+            return;
+          }
+          if (!sudoMode) {
+            awaitingPassword = true;
+            appendLine('[sudo] password for guest:');
+            return;
+          } else {
+            cmd = args.join(' ');
+            if (commands[cmd]) {
+              const result = commands[cmd]([]);
+              if (result !== '') appendLines(result);
+            } else {
+              appendLine(`${cmd}: command not found`);
+            }
+            return;
+          }
+        }
+
+        const directCommand = rawInput;
+        if (commands[directCommand]) {
+          const result = commands[directCommand]([]);
+          if (result !== '') appendLines(result);
+          return;
+        }
+
+        if (commands[cmd]) {
+          const result = commands[cmd](args);
+          if (result !== '') appendLines(result);
+        } else {
+          appendLine(`${cmd}: command not found`);
+        }
+
+        lastCommand = rawInput;
+        scrollToBottom();
+      }
+
+      if (e.key === 'ArrowUp') {
+        input.value = lastCommand;
+      }
+    });
+
+    function appendLine(text) {
+      const line = document.createElement('div');
+      line.className = 'line';
+      line.textContent = text;
+      terminal.appendChild(line);
+      scrollToBottom();
+    }
+
+    function appendLines(textBlock) {
+      const fragment = document.createDocumentFragment();
+      const lines = textBlock.split('\n');
+      for (let i = 0; i < lines.length; i++) {
+        const line = document.createElement('div');
+        line.className = 'line';
+        line.textContent = lines[i];
+        fragment.appendChild(line);
+      }
+      terminal.appendChild(fragment);
+      scrollToBottom();
+    }
+
+    function scrollToBottom() {
+      requestAnimationFrame(() => {
+        terminal.scrollTop = terminal.scrollHeight;
+      });
+    }
+
+    function updatePrompt() {
+      if (sudoMode) {
+        promptText.textContent = 'root@online-terminal:~#';
+      } else {
+        promptText.textContent = 'user@online-terminal:~$';
+      }
+    }
+
+    function getPrompt() {
+      return sudoMode ? 'root@online-terminal:~#' : 'user@online-terminal:~$';
+    }
+
+    // INIT MESSAGE: Time Opened + Device Info + ASCII ART
+    function showInitMessage() {
+      const now = getFormattedDate();
+      const userAgent = navigator.userAgent;
+
+      const asciiArt = `
+        _______________________
+       /                     /|
+      /                     / |
+     /                     /  |
+    /_____________________/   |
+    |     _          _     |  |
+    |    | |        | |    |  |
+    |    |_|        |_|    |  |
+    |       -_____-        |  /
+    |______________________| /
+     \\______________________/
+        |    \\  |  /      |
+       _|     \\ | /       |_
+      /                     \\
+     /                       \\
+    /                         \\
+   |                           |
+       ONLINE TERMINAL
+ 
+ --------------------------------
+`;
+
+      appendLines(asciiArt);
+      appendLine(`Session started on: ${now}`);
+      appendLine(`Accessing device info: ${userAgent}`);
+      appendLine('');
+      scrollToBottom();
+    }
+
+    showInitMessage(); // Call at start
+
+    scrollToBottom();
+    input.focus();
+  </script>
+</body>
+</html>
